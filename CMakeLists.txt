@@ -4,3 +4,4 @@ project(GenomicsFinal)
 set(CMAKE_CXX_STANDARD 20)
 
 add_executable(GenomicsFinal main.cpp)
+add_executable(GenomicsFinalPaper second_program.cpp)

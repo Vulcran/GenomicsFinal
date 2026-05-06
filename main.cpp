@@ -1,7 +1,10 @@
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -283,48 +286,155 @@ private:
     StaticMPHF mphf_;
 };
 
-int main() {
-    const std::vector<std::string> sample_unitigs = {
-        "ATGCGTACGTTAGCTAAGCTTAGGCTAATGCGTACGTTAGCTAAGCTTAGGCTA",
-        "GCTAAGGTTTACCGATCGATGATCGA",
-        "TTTACCGATCGATGATCGATTTAGCA"
+namespace {
+    struct GraphInput {
+        std::size_t k = 0;
+        std::vector<std::string> unitigs;
     };
-    constexpr std::size_t k = 7;
+
+    struct CacheStats {
+        std::size_t hits = 0;
+        std::size_t misses = 0;
+    };
+
+    std::optional<GraphInput> loadCompactedColorGraph(const std::string& graph_path, std::ostream& err) {
+        std::ifstream input(graph_path);
+        if (!input) {
+            err << "Unable to open graph file: " << graph_path << '\n';
+            return std::nullopt;
+        }
+
+        GraphInput graph;
+        std::string line;
+        bool saw_k = false;
+        while (std::getline(input, line)) {
+            if (line.empty()) {
+                continue;
+            }
+
+            if (!saw_k) {
+                std::istringstream iss(line);
+                if (!(iss >> graph.k) || graph.k == 0) {
+                    err << "Invalid graph format: first non-empty line must be a positive k value\n";
+                    return std::nullopt;
+                }
+                saw_k = true;
+                continue;
+            }
+
+            graph.unitigs.push_back(line);
+        }
+
+        if (!saw_k) {
+            err << "Invalid graph format: missing k value\n";
+            return std::nullopt;
+        }
+        if (graph.unitigs.empty()) {
+            err << "Invalid graph format: missing unitig lines\n";
+            return std::nullopt;
+        }
+
+        return graph;
+    }
+
+    std::optional<std::vector<std::string>> loadQueries(const std::string& queries_path, std::ostream& err) {
+        std::ifstream input(queries_path);
+        if (!input) {
+            err << "Unable to open query file: " << queries_path << '\n';
+            return std::nullopt;
+        }
+
+        std::vector<std::string> queries;
+        std::string line;
+        while (std::getline(input, line)) {
+            if (!line.empty()) {
+                queries.push_back(line);
+            }
+        }
+
+        if (queries.empty()) {
+            err << "Query file contains no queries: " << queries_path << '\n';
+            return std::nullopt;
+        }
+
+        return queries;
+    }
+
+    void writeQueryResults(std::ostream& out,
+                           const std::string& query,
+                           const std::vector<FlatArrayIndex::QueryResult>& results) {
+        if (results.empty()) {
+            out << "Query " << query << " => NOT FOUND\n";
+            return;
+        }
+
+        out << "Query " << query << " => FOUND " << results.size() << " hit(s)\n";
+        for (std::size_t i = 0; i < results.size(); ++i) {
+            const auto& result = results[i];
+            out << "   hit " << (i + 1) << ":\n";
+            out << "      unitig_id: " << result.unitig_id << '\n';
+            out << "      unitig_char_offset: " << result.unitig_bit_offset << '\n';
+            out << "      local_offset: " << static_cast<int>(result.local_offset) << '\n';
+            out << "      unitig_prefix: "
+                << result.matched_unitig.substr(0, std::min<std::size_t>(result.matched_unitig.size(), 40))
+                << '\n';
+        }
+    }
+}
+
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <graph_input_file> <queries_input_file> <output_file>\n";
+        return 1;
+    }
+
+    const std::string graph_input_path = argv[1];
+    const std::string queries_input_path = argv[2];
+    const std::string output_path = argv[3];
+
+    const auto graph_input = loadCompactedColorGraph(graph_input_path, std::cerr);
+    if (!graph_input.has_value()) {
+        return 1;
+    }
+
+    const auto queries = loadQueries(queries_input_path, std::cerr);
+    if (!queries.has_value()) {
+        return 1;
+    }
 
     FlatArrayIndex index;
-    index.build(sample_unitigs, k);
+    index.build(graph_input->unitigs, graph_input->k);
 
-    std::cout << "Flat-array + MPHF prototype built\n";
-    std::cout << " - unitigFlat chars: " << index.unitigFlatSize() << '\n';
-    std::cout << " - unique kmers: " << index.uniqueKmerCount() << '\n';
-    std::cout << " - kmerFlat entries: " << index.kmerFlatSize() << "\n\n";
+    std::ofstream output(output_path);
+    if (!output) {
+        std::cerr << "Unable to open output file: " << output_path << '\n';
+        return 1;
+    }
 
-    index.printUnitigStorage();
-    index.printKmerStorage();
+    output << "Flat-array + MPHF index built\n";
+    output << " - unitigFlat chars: " << index.unitigFlatSize() << '\n';
+    output << " - unique kmers: " << index.uniqueKmerCount() << '\n';
+    output << " - kmerFlat entries: " << index.kmerFlatSize() << "\n\n";
 
-    const std::vector<std::string> queries = {
-        "ATGCGTA", "GATCGAT", "AACCCCC"
-    };
-
-    for (const auto& query : queries) {
-        const auto results = index.queryAll(query);
-        if (results.empty()) {
-            std::cout << "Query " << query << " => NOT FOUND\n";
+    CacheStats stats;
+    std::unordered_map<std::string, std::vector<FlatArrayIndex::QueryResult>> query_cache;
+    for (const auto& query : *queries) {
+        const auto it = query_cache.find(query);
+        if (it != query_cache.end()) {
+            ++stats.hits;
+            writeQueryResults(output, query, it->second);
             continue;
         }
 
-        std::cout << "Query " << query << " => FOUND " << results.size() << " hit(s)\n";
-        for (std::size_t i = 0; i < results.size(); ++i) {
-            const auto& result = results[i];
-            std::cout << "   hit " << (i + 1) << ":\n";
-            std::cout << "      unitig_id: " << result.unitig_id << '\n';
-            std::cout << "      unitig_char_offset: " << result.unitig_bit_offset << '\n';
-            std::cout << "      local_offset: " << static_cast<int>(result.local_offset) << '\n';
-            std::cout << "      unitig_prefix: "
-                      << result.matched_unitig.substr(0, std::min<std::size_t>(result.matched_unitig.size(), 40))
-                      << '\n';
-        }
+        ++stats.misses;
+        auto results = index.queryAll(query);
+        writeQueryResults(output, query, results);
+        query_cache.emplace(query, std::move(results));
     }
+
+    output << "\nCache summary:\n";
+    output << " - cache hits: " << stats.hits << '\n';
+    output << " - cache misses: " << stats.misses << '\n';
 
     return 0;
 }
