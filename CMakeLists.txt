@@ -23,6 +23,9 @@ add_executable(bench
     ${CORE_SRCS}
 )
 
+add_executable(build_unitigs build_unitigs.cpp)
+add_executable(build_occ     build_occ.cpp)
+
 # Step 11/12: build a flat index from TSV or GFA input.
 add_executable(flatindex_build
     flatindex_build.cpp

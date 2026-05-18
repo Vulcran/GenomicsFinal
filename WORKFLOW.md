@@ -8,6 +8,15 @@ Two paths to build and query the flat index from real genomic data.
 
 Uses the project's own cdBG builder. Good for development and correctness testing.
 
+
+
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+cd ..
+
+
 ```
 genome.fasta
      │

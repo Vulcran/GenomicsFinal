@@ -65,9 +65,9 @@ static void parse_occ_stream(std::istream& in,
         o.unitig_id = static_cast<uint32_t>(std::stoul(f[c_uid]));
         o.ref_id    = static_cast<uint16_t>(std::stoul(f[c_rid]));
         o.ref_pos   = static_cast<uint32_t>(std::stoul(f[c_rpos]));
-        o.entry_off = static_cast<uint8_t>(std::stoul(f[c_eoff]));
+        o.entry_off = static_cast<uint32_t>(std::stoul(f[c_eoff]));
         o.orient    = f[c_ori].empty() ? '+' : f[c_ori][0];
-        o.walk_len  = static_cast<uint8_t>(std::stoul(f[c_wlen]));
+        o.walk_len  = static_cast<uint32_t>(std::stoul(f[c_wlen]));
         occs.push_back(o);
     }
 }

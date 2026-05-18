@@ -16,8 +16,8 @@ struct InOccurrence {
     uint32_t unitig_id;
     uint16_t ref_id;
     uint32_t ref_pos;
-    uint8_t entry_off;
-    uint8_t walk_len;
+    uint32_t entry_off;
+    uint32_t walk_len;
     char orient; // '+' or '-'
 };
 
