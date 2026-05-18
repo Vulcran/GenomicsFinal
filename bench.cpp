@@ -8,6 +8,7 @@
 #include "query.hpp"
 #include "kmer.hpp"
 #include "metrics.hpp"
+#include "loader.hpp"
 
 using namespace flat_index;
 
@@ -89,26 +90,36 @@ std::string generate_random_dna(size_t len, std::mt19937& rng) {
     return res;
 }
 
-void run_benchmark() {
-    int k = 31;
-    size_t num_unitigs = 10000;
-    size_t unitig_len = 10000;
-    
+void run_benchmark(const std::string& tsv_prefix = "", int tsv_k = 31) {
+    int k = tsv_k;
     std::vector<InUnitig> unitigs;
     std::vector<InOccurrence> occs;
     std::vector<InEdge> edges;
-    
-    std::mt19937 gen(42);
-    std::cout << "Generating " << num_unitigs << " random unitigs..." << std::endl;
-    for (size_t i = 0; i < num_unitigs; ++i) {
-        if (i % 100 == 0 || i == num_unitigs - 1) {
-            std::cout << "\rGenerating: " << (i + 1) << " / " << num_unitigs << std::flush;
+
+    if (!tsv_prefix.empty()) {
+        std::cout << "Loading real data from: " << tsv_prefix << std::endl;
+        auto data = load_from_tsv(tsv_prefix);
+        unitigs = std::move(data.unitigs);
+        occs    = std::move(data.occs);
+        edges   = std::move(data.edges);
+        std::cout << "Loaded " << unitigs.size() << " unitigs, "
+                  << occs.size() << " occurrences, "
+                  << edges.size() << " edges." << std::endl;
+    } else {
+        size_t num_unitigs = 10000;
+        size_t unitig_len = 10000;
+        std::mt19937 gen(42);
+        std::cout << "Generating " << num_unitigs << " random unitigs..." << std::endl;
+        for (size_t i = 0; i < num_unitigs; ++i) {
+            if (i % 100 == 0 || i == num_unitigs - 1) {
+                std::cout << "\rGenerating: " << (i + 1) << " / " << num_unitigs << std::flush;
+            }
+            std::string seq = generate_random_dna(unitig_len, gen);
+            unitigs.push_back({(uint32_t)i, seq});
+            occs.push_back({(uint32_t)i, (uint16_t)i, 0, 0, (uint8_t)(unitig_len - k + 1), '+'});
         }
-        std::string seq = generate_random_dna(unitig_len, gen);
-        unitigs.push_back({(uint32_t)i, seq});
-        occs.push_back({(uint32_t)i, (uint16_t)i, 0, 0, (uint8_t)(unitig_len - k + 1), '+'});
+        std::cout << std::endl;
     }
-    std::cout << std::endl;
     
     std::cout << "Building Pufferfish Index..." << std::endl;
     auto t0 = std::chrono::steady_clock::now();
@@ -136,14 +147,22 @@ void run_benchmark() {
     t1 = std::chrono::steady_clock::now();
     double n_build_time = std::chrono::duration<double>(t1 - t0).count();
 
+    // Collect all queryable (unitig_idx, max_pos) pairs so real data with
+    // variable unitig lengths works correctly.
+    std::vector<std::pair<size_t, size_t>> queryable;
+    for (size_t ui = 0; ui < unitigs.size(); ++ui) {
+        if (unitigs[ui].seq.size() >= static_cast<size_t>(k))
+            queryable.push_back({ui, unitigs[ui].seq.size() - k});
+    }
+
     size_t num_queries = 100000;
     std::vector<std::string> queries;
     std::mt19937 rng(43);
-    std::uniform_int_distribution<size_t> u_dist(0, num_unitigs - 1);
-    std::uniform_int_distribution<size_t> p_dist(0, unitig_len - k);
-    
+    std::uniform_int_distribution<size_t> u_dist(0, queryable.size() - 1);
+
     for (size_t i = 0; i < num_queries; ++i) {
-        size_t u_idx = u_dist(rng);
+        auto [u_idx, max_pos] = queryable[u_dist(rng)];
+        std::uniform_int_distribution<size_t> p_dist(0, max_pos);
         size_t pos = p_dist(rng);
         queries.push_back(unitigs[u_idx].seq.substr(pos, k));
     }
@@ -200,7 +219,15 @@ void run_benchmark() {
     print_sep();
 }
 
-int main() {
-    run_benchmark();
+int main(int argc, char** argv) {
+    std::string tsv_prefix;
+    int k = 31;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--tsv" && i + 1 < argc) tsv_prefix = argv[++i];
+        else if (arg == "--k" && i + 1 < argc) k = std::stoi(argv[++i]);
+        else { std::cerr << "Usage: bench [--tsv <prefix>] [--k <k>]\n"; return 1; }
+    }
+    run_benchmark(tsv_prefix, k);
     return 0;
 }

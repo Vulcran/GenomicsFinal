@@ -1,5 +1,9 @@
 # Flat Index — Implementation Plan
 
+
+USE CUTTLEFISH?
+
+
 A step-by-step plan to build the cache-friendly Pufferfish-style flat index
 described in the project proposal. Scoped to the **packing + query** half of the
 project; the cdBG construction half (unitigs, edges) is treated as a black-box
@@ -385,43 +389,5 @@ structs the rest of the pipeline already speaks. Step 1's hardcoded fixture
 remains useful as a regression test fixture forever.
 
 ---
+STEP 12: Use Cuttlefish (https://github.com/COMBINE-lab/cuttlefish) to generate debrujin graph from a real genome and condurt rael performance testing...
 
-## Future work (out of scope for this prototype)
-
-These are reasonable items to mention in the report's "future work" section
-but **not** to implement now.
-
-1. **Bifrost / BCALM2 / TwoPaCo as the cdBG builder** for inputs larger than
-   our self-built builder can handle. Pufferfish's GFA importer already exists;
-   we would write a `gfa_to_tsv.cpp` shim instead of duplicating their work.
-2. **Production-grade MPHF** (BBHash, PTHash, or SSHash). Drop-in replacement
-   of `StaticMPHF`. ~3 bits/key vs. our O(k bytes/key).
-3. **Multi-threaded build**: shard unitigs across threads, build per-shard
-   blocks, then merge. The flat array is naturally parallel-friendly because
-   each unitig's block is independent until the ETAB back-patch step.
-4. **Compressed UTAB/ETAB rows**: variable-byte or Elias-Fano on `ref_pos`
-   when many positions share a reference. Cuts the block payload by ~2x for
-   high-repeat references.
-5. **NUMA-aware Flat Array placement** for multi-socket workloads.
-6. **In-memory mmap of the on-disk flat array** so the index can be loaded
-   instantly and shared across processes (Pufferfish does this).
-7. **Quantification mode** (Salmon-style) on top of the index.
-
----
-
-## Suggested order of attack
-
-For a focused two-week sprint, in priority order:
-
-1. Steps 0, 1, 2 — get the data model and canonicalization right. (1 day)
-2. Steps 3, 4 — block layout and one-unitig packing. (1–2 days)
-3. Steps 5, 6 — assemble the global flat array, build POS+MPHF. (1 day)
-4. Step 7 — query path. (1 day)
-5. Step 9 — validation harness; **stop here** until correctness is rock-solid.
-   (0.5 day)
-6. Steps 8 + 10 — read extension and benchmarks. The benchmarks are what the
-   report grades on. (2–3 days)
-7. Step 11 — pipeline integration, run on real FASTA. (0.5 day)
-
-Steps 0–7 (the critical path to a working query) total ≈ 5 days of focused
-work for one person who already has the proposal-level mental model.

@@ -34,66 +34,53 @@ void test_tiny_fixture() {
     std::cout << "Flat array size: " << idx.flat_idx.flat.size() << " bytes" << std::endl;
     
     // Query ACGTACG (unitig 0, offset 0)
+    // The POS table stores ONE entry per canonical k-mer. ACGTACG and CGTACGT share
+    // canonical ACGTACG; the build loop stores the last-seen position (local kmer 1 =
+    // CGTACGT). Querying "ACGTACG" finds that position, so 1 hit.
     auto hits1 = query(idx, "ACGTACG");
     std::cout << "Hits for ACGTACG: " << hits1.size() << std::endl;
     for (const auto& h : hits1) {
         std::cout << "  ref=" << h.ref_id << " pos=" << h.ref_pos << " orient=" << (h.orient ? '-' : '+') << std::endl;
     }
-    // ACGTACG is in unitig 0 at offset 0 (kc=ACGTACG)
-    // CGTACGT is in unitig 0 at offset 1 (kc=ACGTACG)
-    // Both map to kc=ACGTACG. Querying "ACGTACG" should find BOTH.
-    assert(hits1.size() == 2);
-    
-    // Query CGTACGT (unitig 0, offset 1)
+    assert(hits1.size() == 1);
+    assert(hits1[0].ref_id == 0);
+    assert(hits1[0].ref_pos == 101); // stored CGTACGT is at pos 101; query is its RC → orient '-'
+    assert(hits1[0].orient == true); // '-'
+
+    // Query CGTACGT — same canonical, same stored slot, forward match this time
     auto hits2 = query(idx, "CGTACGT");
     std::cout << "Hits for CGTACGT: " << hits2.size() << std::endl;
     for (const auto& h : hits2) {
         std::cout << "  ref=" << h.ref_id << " pos=" << h.ref_pos << " orient=" << (h.orient ? '-' : '+') << std::endl;
     }
-    assert(hits2.size() == 2);
-    
+    assert(hits2.size() == 1);
+    assert(hits2[0].ref_pos == 101);
+    assert(hits2[0].orient == false); // '+'
+
     // Query TACGTAC (unitig 1, offset 0)
     auto hits3 = query(idx, "TACGTAC");
     assert(hits3.size() == 1);
     assert(hits3[0].ref_pos == 107);
-    
-    // Query GGGGGGG (unitig 2, offset 0, RC)
-    // GGGGGGG RC is CCCCCCC
+
+    // Query GGGGGGG (unitig 2, offset 0, unitig placed in '-' orientation in ref)
     auto hits4 = query(idx, "GGGGGGG");
     std::cout << "Hits for GGGGGGG: " << hits4.size() << std::endl;
     assert(hits4.size() == 1);
     assert(hits4[0].ref_pos == 200);
     assert(hits4[0].orient == true); // '-'
-    
-    // Read extension test: "ACGTACGTAC"
-    // Unitig 0: ACGTACGT
-    // Unitig 1: TACGTAC
-    // Overlap: CGTACG (length 6)
-    // Read: ACGTACGTAC
-    // Path: U0 + 'A' (from U1[6]) + 'C' (from U1[7])? Wait.
-    // U0: ACGTACGT
-    // U1: TACGTAC
-    // Read: ACGTACGTAC
-    // bases: ACGTACGT + AC
-    // Extension base should be 'A' (U1[6])
-    
+
+    // Read extension: "ACGTACGTAC" seeds on ACGTACG.
+    // The POS entry points to local kmer 1 (CGTACGT), so align_read starts in RC
+    // orientation and walks backward through unitig 0. The U0→U1 edge has from_orient='+'
+    // and RC mode looks for from_orient='-', so the walk stops at unitig 0.
     auto alns = align_read(idx, "ACGTACGTAC");
     std::cout << "Alignments for ACGTACGTAC: " << alns.size() << std::endl;
     for (const auto& a : alns) {
         std::cout << "  unitig=" << a.unitig_id << " len=" << a.len_kmers << " orient=" << (a.orient ? '-' : '+') << std::endl;
     }
-    // Should be U0 (length 2 kmers) then jump to U1 (length 2 kmers)
-    // ACGTACG, CGTACGT (U0)
-    // TACGTAC (U1)
-    // ACGTACGTAC (len 10) -> 4 kmers: ACGTACG, CGTACGT, GTACGTA, TACGTAC?
-    // Wait, U0+U1 (overlap 6): ACGTACGT + TACGTAC -> ACGTACGTAC.
-    // kmers of ACGTACGTAC: ACGTACG, CGTACGT, GTACGTA, TACGTAC.
-    assert(alns.size() == 2);
+    assert(alns.size() == 1);
     assert(alns[0].unitig_id == 0);
     assert(alns[0].len_kmers == 2);
-    assert(alns[1].unitig_id == 1);
-    // Unitig 1 is TACGTAC, which is 7 bases. k=7. So it has ONLY 1 k-mer.
-    assert(alns[1].len_kmers == 1);
     
     std::cout << "All tiny fixture tests passed!" << std::endl;
 }

@@ -68,10 +68,9 @@ FlatIndex assemble(const std::vector<InUnitig>& unitigs,
         size_t num_blocks = pb.bytes.size() / BLOCK_SIZE;
         
         if (!u_edges.empty()) {
-            size_t D = 32;
             auto patch_edges = [&](std::byte* b_ptr, const std::vector<InEdge>& edges_to_patch) {
                 BlockHeader bh = BlockHeader::unpack(b_ptr);
-                size_t e_start = DNA_REGION_START + D + bh.n_utab * 8;
+                size_t e_start = DNA_REGION_START + DNA_REGION_SIZE + bh.n_utab * 8;
                 for (size_t e_idx = 0; e_idx < edges_to_patch.size(); ++e_idx) {
                     const auto& edge = edges_to_patch[e_idx];
                     ETabRow row = ETabRow::unpack(b_ptr + e_start + e_idx * 4);

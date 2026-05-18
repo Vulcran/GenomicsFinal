@@ -127,6 +127,23 @@ public:
     [[nodiscard]] std::size_t size() const { return size_; }
     [[nodiscard]] std::size_t table_size() const { return size_; }
 
+    void save(std::ostream& out) const {
+        out.write(reinterpret_cast<const char*>(&size_), sizeof(size_));
+        size_t n = seeds_.size();
+        out.write(reinterpret_cast<const char*>(&n), sizeof(n));
+        if (n > 0) out.write(reinterpret_cast<const char*>(seeds_.data()), n * sizeof(int32_t));
+    }
+
+    void load(std::istream& in) {
+        in.read(reinterpret_cast<char*>(&size_), sizeof(size_));
+        size_t n;
+        in.read(reinterpret_cast<char*>(&n), sizeof(n));
+        seeds_.resize(n);
+        if (n > 0) in.read(reinterpret_cast<char*>(seeds_.data()), n * sizeof(int32_t));
+    }
+
+    friend class IndexSerializer;
+
 private:
     static std::uint64_t baseHash(uint64_t key) {
         // Standard 64-bit integer hash

@@ -17,7 +17,7 @@ struct RefHit {
 struct FullIndex {
     FlatIndex   flat_idx;
     StaticMPHF  mphf;
-    std::vector<uint64_t> pos_table; // slot -> (loc_kmers << 56 | block_off)
+    std::vector<uint64_t> pos_table; // slot -> (block_byte_off << 8 | local_kmer_in_block)
 };
 
 std::vector<RefHit> query(const FullIndex& idx, const std::string& kmer);

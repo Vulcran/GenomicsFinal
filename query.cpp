@@ -19,8 +19,6 @@ FullIndex build_full_index(const std::vector<InUnitig>& unitigs,
     kmer_to_pos.reserve((idx.flat_idx.flat.size() / BLOCK_SIZE) * 128);
     
     size_t current_offset = 0;
-    size_t head_offset = 0;
-    uint16_t last_uid = 0xFFFF;
     size_t total_blocks = idx.flat_idx.flat.size() / BLOCK_SIZE;
     size_t blocks_processed = 0;
 
@@ -30,12 +28,7 @@ FullIndex build_full_index(const std::vector<InUnitig>& unitigs,
         }
         const std::byte* block_ptr = &idx.flat_idx.flat[current_offset];
         BlockHeader h = BlockHeader::unpack(block_ptr);
-        
-        if (h.unitig_id != last_uid) {
-            head_offset = current_offset;
-            last_uid = h.unitig_id;
-        }
-        
+
         const std::byte* dna_ptr = block_ptr + DNA_REGION_START;
         uint64_t k_enc = 0;
         uint64_t mask = (k == 32) ? ~0ULL : (1ULL << (2 * k)) - 1;
@@ -52,10 +45,9 @@ FullIndex build_full_index(const std::vector<InUnitig>& unitigs,
                 k_enc = ((k_enc << 2) | next_base) & mask;
             }
             uint64_t kc = canonical(k_enc, k);
-            
-            // Optimized Pufferfish packing: [0-31] head_block_off, [32-63] kmer_idx_in_unitig
-            uint32_t kmer_idx_in_unitig = (current_offset - head_offset) / BLOCK_SIZE * 128 + i;
-            uint64_t pos_entry = (static_cast<uint64_t>(kmer_idx_in_unitig) << 32) | static_cast<uint32_t>(head_offset);
+
+            // Report format: upper 56 bits = block byte offset, lower 8 bits = local k-mer index within block
+            uint64_t pos_entry = (static_cast<uint64_t>(current_offset) << 8) | static_cast<uint64_t>(i);
             kmer_to_pos[kc] = pos_entry;
         }
         
@@ -101,34 +93,45 @@ std::vector<RefHit> query(const FullIndex& idx, const std::string& kmer_str) {
     
     g_cache_counter.record_miss(); // Access pos_table
     uint64_t pos = idx.pos_table[slot];
-    uint32_t head_off = static_cast<uint32_t>(pos & 0xFFFFFFFFULL);
-    uint32_t kmer_idx_in_unitig = static_cast<uint32_t>(pos >> 32);
-    
-    uint32_t block_off = head_off + (kmer_idx_in_unitig / 128) * BLOCK_SIZE;
-    uint8_t loc_kmers = static_cast<uint8_t>(kmer_idx_in_unitig % 128);
-    
+    uint32_t block_off = static_cast<uint32_t>(pos >> 8);
+    uint8_t loc_kmers = static_cast<uint8_t>(pos & 0xFF);
+
     if (block_off >= idx.flat_idx.flat.size()) return {};
     g_cache_counter.record_miss(); // Access flat array block
     const std::byte* block_ptr = &idx.flat_idx.flat[block_off];
     uint64_t k_read = read_kmer(block_ptr + DNA_REGION_START, loc_kmers * 2, k);
     if (canonical(k_read, k) != kc) return {};
-    
+
     bool query_is_rc = (k_enc != k_read);
+
+    // Walk backward to find the head block which holds the UTAB rows.
+    // (For O(1) lookup, a future revision could store head_block_off in each block header.)
+    BlockHeader h = BlockHeader::unpack(block_ptr);
+    uint32_t head_off = block_off;
+    while (head_off >= BLOCK_SIZE) {
+        const BlockHeader prev_h = BlockHeader::unpack(&idx.flat_idx.flat[head_off - BLOCK_SIZE]);
+        if (prev_h.unitig_id != h.unitig_id || (prev_h.flags & 0x01) == 0) break;
+        head_off -= BLOCK_SIZE;
+        h = prev_h;
+    }
+    uint32_t kmer_idx_in_unitig = (block_off - head_off) / BLOCK_SIZE * 128 + loc_kmers;
 
     const std::byte* head_ptr = &idx.flat_idx.flat[head_off];
     if (head_off != block_off) {
-        g_cache_counter.record_miss(); // Access head block (different from k-mer block)
+        g_cache_counter.record_miss();
     }
-    BlockHeader h = BlockHeader::unpack(head_ptr);
-    
+    BlockHeader head_h = BlockHeader::unpack(head_ptr);
+
     size_t utab_start = DNA_REGION_START + DNA_REGION_SIZE;
     std::vector<RefHit> all_hits;
-    for (int i = 0; i < h.n_utab; ++i) {
+    for (int i = 0; i < head_h.n_utab; ++i) {
         UTabRow row = UTabRow::unpack(head_ptr + utab_start + i * 8);
         RefHit hit;
         hit.ref_id = row.ref_id;
         hit.orient = (row.orient != query_is_rc);
-        if (!hit.orient) hit.ref_pos = row.ref_pos + (kmer_idx_in_unitig - row.entry_off);
+        // Position formula depends on the unitig's placement orientation (row.orient),
+        // not on which strand the query k-mer came from.
+        if (!row.orient) hit.ref_pos = row.ref_pos + (kmer_idx_in_unitig - row.entry_off);
         else hit.ref_pos = row.ref_pos + (row.entry_off - kmer_idx_in_unitig);
         all_hits.push_back(hit);
     }
@@ -147,8 +150,8 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
     if (slot >= idx.pos_table.size()) return {};
     
     uint64_t pos = idx.pos_table[slot];
-    uint32_t block_off = static_cast<uint32_t>(pos & 0x00FFFFFFFFFFFFFFULL);
-    uint8_t loc_kmers = static_cast<uint8_t>(pos >> 56);
+    uint32_t block_off = static_cast<uint32_t>(pos >> 8);
+    uint8_t loc_kmers = static_cast<uint8_t>(pos & 0xFF);
     
     if (block_off >= idx.flat_idx.flat.size()) return {};
     const std::byte* block_ptr = &idx.flat_idx.flat[block_off];
