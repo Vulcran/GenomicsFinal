@@ -6,8 +6,7 @@ Two paths to build and query the flat index from real genomic data.
 
 ## Path A — Project Pipeline (build_unitigs + build_occ)
 
-Uses the project's own cdBG builder. Good for development and correctness testing.
-
+Uses the project's own cdBG builder.
 
 
 mkdir build
@@ -16,6 +15,14 @@ cmake ..
 cmake --build . --config Release
 cd ..
 
+
+or 
+
+
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j$(sysctl -n hw.logicalcpu)
+cd ..
 
 ```
 genome.fasta
@@ -39,11 +46,11 @@ flatindex_query     →   hits
 
 ```bash
 # 1. Build the compacted de Bruijn graph
-./Project/bin/build_unitigs genome.fasta data/genome 31
+./build/build_unitigs genome.fasta data/genome 31
 # writes: data/genome.unitigs.tsv  data/genome.edges.tsv
 
 # 2. Build the occurrence table
-./Project/bin/build_occ genome.fasta data/genome 31
+./build/build_occ genome.fasta data/genome 31
 # writes: data/genome.occ.tsv  data/genome.refs.tsv
 
 # 3. Build the flat index
@@ -61,7 +68,7 @@ flatindex_query     →   hits
 
 ## Path B — Cuttlefish
 
-Uses [Cuttlefish 2](https://github.com/COMBINE-lab/cuttlefish) as the cdBG builder.
+Uses [Cuttlefish](https://github.com/COMBINE-lab/cuttlefish) as the cdBG builder.
 Cuttlefish is faster and scales to full mammalian genomes; the occurrence table is
 still computed by `build_occ` (which only needs the unitig sequences, not how they
 were built).
@@ -120,8 +127,7 @@ conda run cuttlefish build \
 # writes: output.gfa
 
 # 2. Convert GFA segments to unitigs.tsv so build_occ can read them.
-#    IDs are assigned 0-indexed in segment-appearance order — this matches
-#    what flatindex_build's GFA loader does internally.
+
 awk 'BEGIN{print "id\tlength\tsequence"; n=0}
      /^S/  {print n"\t"length($3)"\t"$3; n++}' \
   output.gfa > output.unitigs.tsv

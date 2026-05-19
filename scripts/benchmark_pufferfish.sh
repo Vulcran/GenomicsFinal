@@ -27,6 +27,7 @@ READ_LEN=100
 DATA_DIR="data"
 PREFIX="${DATA_DIR}/ecoli"
 QUERIES="${DATA_DIR}/queries.fastq"
+KMERS="${DATA_DIR}/queries.kmers"
 FLAT_INDEX="${DATA_DIR}/ecoli.flat"
 PUF_INDEX="${DATA_DIR}/puf_index"
 THREADS="$(sysctl -n hw.logicalcpu)"
@@ -39,7 +40,7 @@ echo " Flat Index vs Pufferfish Benchmark"
 printf "  Reference : %s\n" "$FASTA"
 printf "  k         : %s\n" "$K"
 printf "  Queries   : %s reads x %s bp\n" "$N_QUERIES" "$READ_LEN"
-printf "  Threads   : %s\n" "$THREADS"
+printf "  Build threads : %s (query comparison is single-threaded)\n" "$THREADS"
 hr
 echo
 
@@ -73,16 +74,11 @@ echo
 
 # ── 3. Build flat index ───────────────────────────────────────────────────────
 echo "[3/6] Building flat index..."
-
-echo "    build_unitigs → ${PREFIX}.unitigs.tsv"
 "$BU" "$FASTA" "$PREFIX" "$K" 2>&1 | grep '\[build_unitigs\]' | tail -2
+"$BO" "$FASTA" "$PREFIX" "$K" 2>&1 | grep -E 'sanity|reconstruction|wrote' || true
 
-echo "    build_occ     → ${PREFIX}.occ.tsv"
-"$BO" "$FASTA" "$PREFIX" "$K" 2>&1 \
-    | grep -E 'sanity|reconstruction|wrote' || true
-
-echo "    flatindex_build → $FLAT_INDEX"
-"$FIB" --tsv "$PREFIX" --k "$K" --out "$FLAT_INDEX" 2>&1 | tail -2
+echo "── Flat index build time (flatindex_build only) ─────"
+{ time "$FIB" --tsv "$PREFIX" --k "$K" --out "$FLAT_INDEX" 2>&1 | tail -2; } 2>&1
 echo
 
 # ── 4. Install pufferfish if needed ──────────────────────────────────────────
@@ -114,13 +110,14 @@ echo
 
 # ── 5. Build pufferfish index ─────────────────────────────────────────────────
 echo "[5/6] Building pufferfish index (k=$K)..."
+echo "── Pufferfish index build time ──────────────────────"
 mkdir -p "$PUF_INDEX"
-pufferfish index \
-    --refseq  "$FASTA" \
-    --output  "$PUF_INDEX" \
-    --klen    "$K" \
-    --threads "$THREADS" \
-    2>&1 | tail -4
+{ time pufferfish index \
+    -r "$FASTA" \
+    -o "$PUF_INDEX" \
+    -k "$K" \
+    -p 1 \
+    > /dev/null 2>/dev/null; } 2>&1
 echo
 
 # ── 6. Timed comparison ───────────────────────────────────────────────────────
@@ -129,19 +126,44 @@ echo
 
 # Flat index — align_read() walk for each read in the FASTQ
 echo "── Your flat index (flatindex_query --fastq) ──"
-{ time "$FIQ" "$FLAT_INDEX" --fastq "$QUERIES" > /dev/null 2>/dev/null; } 2>&1
+{ time "$FIQ" "$FLAT_INDEX" --fastq "$QUERIES" --noOutput; } 2>&1
 echo
 
 # Pufferfish — seed-and-extend alignment, SAM output suppressed
 echo "── Original Pufferfish (pufferfish align) ──────"
 { time pufferfish align \
-    --index   "$PUF_INDEX" \
-    --read1   "$QUERIES" \
-    --threads "$THREADS" \
+    -i "$PUF_INDEX" \
+    --read "$QUERIES" \
+    -t 1 \
+    --noOutput \
+    > /dev/null 2>/dev/null; } 2>&1
+echo
+
+hr
+echo " Alignment comparison done."
+hr
+echo
+
+# ── 7. K-mer lookup comparison ────────────────────────────────────────────────
+echo "[7/7] K-mer lookup comparison ($N_QUERIES individual k-mers)..."
+echo
+
+# Extract first k-mer from each read in the FASTQ
+awk 'NR%4==2 {print substr($0,1,'"$K"')}' "$QUERIES" > "$KMERS"
+
+echo "── Your flat index (flatindex_query --kmer-file) ──"
+{ time "$FIQ" "$FLAT_INDEX" --kmer-file "$KMERS" --noOutput; } 2>&1
+echo
+
+echo "── Original Pufferfish (pufferfish kquery) ─────────"
+{ time pufferfish kquery \
+    -i "$PUF_INDEX" \
+    -q "$KMERS" \
+    -p 1 \
     > /dev/null 2>/dev/null; } 2>&1
 echo
 
 hr
 echo " Copy the 'real' wall-clock times above into bench-report.md."
-echo " Both tools ran on the same FASTQ with the same k=$K."
+echo " Both tools queried the same $N_QUERIES k-mers with k=$K."
 hr

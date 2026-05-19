@@ -9,8 +9,7 @@
 //   --fastq <file.fq>   Query every read in a FASTQ file
 //   --stdin             Read one k-mer or read per line from stdin
 //
-// Without any option, enters interactive line-reading mode.
-//
+// 
 // Example:
 //   flatindex_query 200bp.flat --kmer ACGTACGTACGTACGTACGTACGTACGTACG
 
@@ -20,6 +19,7 @@
 #include <stdexcept>
 #include "query.hpp"
 #include "serializer.hpp"
+#include "metrics.hpp"
 
 using namespace flat_index;
 
@@ -74,8 +74,9 @@ int main(int argc, char** argv) {
     if (argc < 2) { usage(argv[0]); return 1; }
     std::string index_path = argv[1];
 
-    std::string kmer_arg, read_arg, fastq_path;
+    std::string kmer_arg, read_arg, fastq_path, kmer_file;
     bool from_stdin = false;
+    bool no_output = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -83,10 +84,12 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) throw std::runtime_error("missing argument after " + arg);
             return argv[++i];
         };
-        if      (arg == "--kmer")  kmer_arg   = next();
-        else if (arg == "--read")  read_arg   = next();
-        else if (arg == "--fastq") fastq_path = next();
-        else if (arg == "--stdin") from_stdin = true;
+        if      (arg == "--kmer")       kmer_arg   = next();
+        else if (arg == "--read")       read_arg   = next();
+        else if (arg == "--fastq")      fastq_path = next();
+        else if (arg == "--kmer-file")  kmer_file  = next();
+        else if (arg == "--stdin")      from_stdin = true;
+        else if (arg == "--noOutput")   no_output  = true;
         else { std::cerr << "unknown argument: " << arg << "\n"; usage(argv[0]); return 1; }
     }
 
@@ -110,6 +113,20 @@ int main(int argc, char** argv) {
             auto alns = align_read(idx, read_arg);
             print_alns(alns, read_arg);
 
+        } else if (!kmer_file.empty()) {
+            std::ifstream kf(kmer_file);
+            if (!kf) throw std::runtime_error("cannot open: " + kmer_file);
+            std::string kmer;
+            size_t n = 0, hits = 0;
+            while (std::getline(kf, kmer)) {
+                if (kmer.empty()) continue;
+                auto h = query(idx, kmer);
+                if (!no_output) print_hits(h, kmer);
+                if (!h.empty()) ++hits;
+                ++n;
+            }
+            std::cerr << "queried " << n << " k-mers, " << hits << " hits\n";
+
         } else if (!fastq_path.empty()) {
             std::ifstream fq(fastq_path);
             if (!fq) throw std::runtime_error("cannot open: " + fastq_path);
@@ -117,11 +134,15 @@ int main(int argc, char** argv) {
             size_t n = 0;
             while (read_fastq_record(fq, name, seq)) {
                 auto alns = align_read(idx, seq);
-                std::cout << "@" << name << "\n";
-                print_alns(alns, seq);
+                if (!no_output) {
+                    std::cout << "@" << name << "\n";
+                    print_alns(alns, seq);
+                }
                 ++n;
             }
             std::cerr << "aligned " << n << " reads\n";
+            std::cerr << "cache misses (simulated): " << g_cache_counter.misses
+                      << "  (" << (g_cache_counter.misses / (n ? n : 1)) << " per read)\n";
 
         } else {
             // Interactive / --stdin: one sequence per line.

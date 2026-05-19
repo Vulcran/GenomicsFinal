@@ -142,8 +142,7 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
     int k = idx.flat_idx.k;
     if (read.length() < (size_t)k) return {};
     
-    std::string first_kmer = read.substr(0, k);
-    uint64_t k_enc = encode(first_kmer);
+    uint64_t k_enc = encode(read.substr(0, k));
     uint64_t kc = canonical(k_enc, k);
     
     size_t slot = idx.mphf.lookup(kc);
@@ -176,9 +175,13 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
     uint32_t kmers_per_block = 128;
     curr_aln.start_kmer_idx = (current_block_off - head_off) / BLOCK_SIZE * kmers_per_block + current_loc_kmers;
     curr_aln.len_kmers = 1;
-    
+
+    uint64_t mask = (k == 32) ? ~0ULL : (1ULL << (2 * k)) - 1;
+    uint64_t k_fwd = k_enc; // sliding forward-strand encoding of read[i..i+k-1]
+
     std::vector<Alignment> alns;
     for (size_t i = 1; i + k <= read.length(); ++i) {
+        k_fwd = ((k_fwd << 2) | base_to_bits(read[i + k - 1])) & mask;
         char next_base = read[i + k - 1];
         bool extended = false;
         
@@ -188,6 +191,7 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
                 extended = true;
             } else if (h.flags & 0x01) {
                 current_block_off += BLOCK_SIZE;
+                if (current_block_off >= idx.flat_idx.flat.size()) break;
                 current_loc_kmers = 0;
                 block_ptr = &idx.flat_idx.flat[current_block_off];
                 h = BlockHeader::unpack(block_ptr);
@@ -199,6 +203,7 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
                     if (bits_to_base(er.ext_base) == next_base && er.from_orient == false) {
                         alns.push_back(curr_aln);
                         current_block_off = er.to_block_offset_div_64 * 64;
+                        if (current_block_off >= idx.flat_idx.flat.size()) break;
                         current_loc_kmers = 0;
                         current_orient = er.to_orient;
                         block_ptr = &idx.flat_idx.flat[current_block_off];
@@ -236,14 +241,17 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
                         if (bits_to_base(er.ext_base) == next_base && er.from_orient == true) {
                             alns.push_back(curr_aln);
                             uint32_t target_head_off = er.to_block_offset_div_64 * 64;
+                            if (target_head_off >= idx.flat_idx.flat.size()) break;
                             current_orient = er.to_orient;
                             if (current_orient) {
                                 uint32_t t_off = target_head_off;
                                 BlockHeader th = BlockHeader::unpack(&idx.flat_idx.flat[t_off]);
                                 while (th.flags & 0x01) {
                                     t_off += BLOCK_SIZE;
+                                    if (t_off >= idx.flat_idx.flat.size()) break;
                                     th = BlockHeader::unpack(&idx.flat_idx.flat[t_off]);
                                 }
+                                if (t_off >= idx.flat_idx.flat.size()) break;
                                 current_block_off = t_off;
                                 block_ptr = &idx.flat_idx.flat[current_block_off];
                                 h = th;
@@ -260,7 +268,7 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
                                 uint32_t t_head = target_head_off;
                                 uint32_t total_kmers = 0;
                                 uint32_t t_curr = t_head;
-                                while(true) {
+                                while (t_curr < idx.flat_idx.flat.size()) {
                                     BlockHeader th = BlockHeader::unpack(&idx.flat_idx.flat[t_curr]);
                                     total_kmers += th.dna_len_kmers;
                                     if (!(th.flags & 0x01)) break;
@@ -281,9 +289,8 @@ std::vector<Alignment> align_read(const FullIndex& idx, const std::string& read)
         
         if (extended) {
             uint64_t k_read_ext = read_kmer(block_ptr + DNA_REGION_START, current_loc_kmers * 2, k);
-            uint64_t k_expected = encode(read.substr(i, k));
             if (current_orient) k_read_ext = reverse_complement(k_read_ext, k);
-            if (k_read_ext == k_expected) curr_aln.len_kmers++;
+            if (k_read_ext == k_fwd) curr_aln.len_kmers++;
             else break;
         } else break;
     }

@@ -15,51 +15,6 @@
 //                          (kept alongside so downstream code can look up a
 //                           FASTA name from the integer ref_id)
 //
-// Schema design notes:
-//   For a LINEAR unitig U of length L appearing in the FASTA fully and
-//   contiguously, a row degenerates to the standard Pufferfish ContigTable
-//   trio (ref_id, ref_pos, orient) with entry_off = 0 (or L-k for orient='-')
-//   and walk_len = L - k + 1.
-//
-//   For CYCLIC unitigs (which arise even from continuous FASTAs whenever a
-//   k-mer cycle has no in/out branches into the rest of the graph), the
-//   reference often enters mid-cycle, so the unitig's stored 5' end may not
-//   align with ref_pos. The (entry_off, walk_len) pair captures exactly which
-//   slice of unitig.seq is observed at this run, with no ambiguity.
-//
-//   The reference position of a query k-mer at unitig offset off_local in an
-//   occurrence row r is then:
-//       orient '+':  ref_pos + (off_local - entry_off)
-//                    valid iff off_local in [entry_off, entry_off + walk_len)
-//       orient '-':  ref_pos + (entry_off - off_local)
-//                    valid iff off_local in (entry_off - walk_len, entry_off]
-//
-// Algorithm summary:
-//   1. Pass 1 indexes every canonical k-mer in <out_prefix>.unitigs.tsv into a
-//      hash map  H : canonical_kmer  ->  (unitig_id, off_local, o_local)
-//      where off_local is the position of the k-mer inside the unitig's
-//      stored sequence and o_local is '+' if the forward k-mer at that offset
-//      is canonical, '-' otherwise. Each canonical k-mer must belong to
-//      exactly one unitig; a duplicate is a hard failure.
-//   2. Pass 2 slides a k-mer window over each FASTA record. For each k-mer:
-//        a. compute canonical(K) and ref_strand ('+' if forward k-mer is
-//           canonical, '-' otherwise)
-//        b. look up H -> (u, off_local, o_local)
-//        c. compute o_ref:  '+' iff o_local == ref_strand, else '-'
-//        d. continuity check vs the running occurrence:
-//             continue iff same unitig, same orient, AND off_local stepped by
-//             +1 (forward orient) or -1 (reverse orient) from the previous
-//             k-mer in the run; otherwise emit the run and start a new one
-//        e. on a new run set ref_pos = p (FASTA position of this k-mer),
-//           entry_off = off_local, walk_len = 1; on each continuation
-//           walk_len is incremented.
-//   3. Two sanity checks before write-out:
-//        - sum of walk_len over all rows must equal the count of valid k-mer
-//          windows in the FASTA (every reference k-mer accounted for)
-//        - per-k-mer reconstruction: stepping through each run, the k-mer at
-//          unitig.seq[entry_off + s*sign] (read in orient direction) must
-//          equal ref[ref_pos + s ..] for s in [0, walk_len)
-//
 // Build:  make            (top-level Makefile produces bin/build_occ)
 // Usage:  bin/build_occ <input.fasta> <out_prefix> [k]
 

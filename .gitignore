@@ -1,3 +1,7 @@
+.idea/
 .claude/
 build/
 build_debug/
+pufferfish/
+testfasta/
+data/
